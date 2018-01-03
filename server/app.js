@@ -159,7 +159,7 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(htpasswdFilePath)) {
 app.use(express.static(path.resolve(__dirname, '..', 'build'), { index: false }))
 
 const getIndex = function(callback) {
-  if (index) { return callback(null, index) }
+  if (esIndex) { return callback(null, esIndex) }
 
   async function hasTags (client, index) {
     return await client
@@ -188,7 +188,7 @@ const getIndex = function(callback) {
   return esClient.cat
     .indices({index: 'collection_*', s: 'creation.date:desc', h: ['i']})
     .then(getFirstIndexWithTags)
-    .then(idx => { return callback(null, idx) })
+    .then(idx => { esIndex = idx; return callback(null, idx) })
 }
 
 app.get('/api/latestIndex', (req, res) => {
@@ -198,31 +198,35 @@ app.get('/api/latestIndex', (req, res) => {
 })
 
 app.get('/api/objects/:object_id', (req, res) => {
-  const options = {
-    index: getIndex(),
-    type: 'object',
-    id: req.params.object_id
-  }
-  esClient.get(options, function (error, esRes) {
-    if (error) {
-      console.error(`[error] esClient: ${error.message}`)
-      res.json(error)
-    } else {
-      res.json(esRes._source)
+  getIndex((err, index) => {
+    const options = {
+      index: index,
+      type: 'object',
+      id: req.params.object_id
     }
+    esClient.get(options, function (error, esRes) {
+      if (error) {
+        console.error(`[error] esClient: ${error.message}`)
+        res.json(error)
+      } else {
+        res.json(esRes._source)
+      }
+    })
   })
 })
 
 app.get('/api/search', (req, res) => {
-  esClient.search({
-    index: getIndex(),
-    body: req.query.body
-  }, function (error, esRes) {
-    if (error) {
-      res.json(error)
-    } else {
-      res.json(esRes)
-    }
+  getIndex((err, index) => {
+    esClient.search({
+      index: index,
+      body: req.query.body
+    }, function (error, esRes) {
+      if (error) {
+        res.json(error)
+      } else {
+        res.json(esRes)
+      }
+    })
   })
 })
 
@@ -248,27 +252,29 @@ function getObjectDescriptors (objectID) {
 }
 
 function getRelatedObjects (objectID) {
-  let body = bodybuilder()
-    .filter('exists', 'imageSecret')
-    .from(0).size(1000)
-    .query('more_like_this', {
-      'like': [
-        {
-          '_index': getIndex(),
-          '_type': 'object',
-          '_id': objectID
-        }
-      ],
-      'fields': ALL_MORE_LIKE_THIS_FIELDS,
-      'min_term_freq': 1,
-      'minimum_should_match': '10%'
-    })
-    .build()
+  getIndex((err, index) => {
+    let body = bodybuilder()
+      .filter('exists', 'imageSecret')
+      .from(0).size(1000)
+      .query('more_like_this', {
+        'like': [
+          {
+            '_index': index,
+            '_type': 'object',
+            '_id': objectID
+          }
+        ],
+        'fields': ALL_MORE_LIKE_THIS_FIELDS,
+        'min_term_freq': 1,
+        'minimum_should_match': '10%'
+      })
+      .build()
 
-  return axios
-    .get(`${canonicalRoot}/api/search`, { params: { body } })
-    .then(response => response.data.hits.hits)
-    .catch((error) => console.error(error.message))
+    return axios
+      .get(`${canonicalRoot}/api/search`, { params: { body } })
+      .then(response => response.data.hits.hits)
+      .catch((error) => console.error(error.message))
+  })
 }
 
 const getDistance = (from, to) => {
@@ -300,40 +306,42 @@ const getDistance = (from, to) => {
 }
 
 app.get('/api/related', (req, res) => {
-  const {objectID, dissimilarPercent} = req.query
-  const similarPercent = 100 - clamp(dissimilarPercent, 0, 100)
-  const similarRatio = similarPercent / 100.0
+  getIndex((err, index) => {
+    const {objectID, dissimilarPercent} = req.query
+    const similarPercent = 100 - clamp(dissimilarPercent, 0, 100)
+    const similarRatio = similarPercent / 100.0
 
-  axios
-    .all([getObjectDescriptors(objectID), getRelatedObjects(objectID)])
-    .then(axios.spread((objectDescriptors, relatedObjects) => {
-      const sources = relatedObjects.map(object => object._source)
+    axios
+      .all([getObjectDescriptors(objectID), getRelatedObjects(objectID)])
+      .then(axios.spread((objectDescriptors, relatedObjects) => {
+        const sources = relatedObjects.map(object => object._source)
 
-      const sorted = sources.sort((a, b) => getDistance(a, objectDescriptors) - getDistance(b, objectDescriptors))
+        const sorted = sources.sort((a, b) => getDistance(a, objectDescriptors) - getDistance(b, objectDescriptors))
 
-      const maxSize = Math.min(BARNES_SETTINGS.size, sorted.length)
+        const maxSize = Math.min(BARNES_SETTINGS.size, sorted.length)
 
-      const similarItemCount = Math.floor(maxSize * similarRatio)
+        const similarItemCount = Math.floor(maxSize * similarRatio)
 
-      const similarItems = sorted.slice(0, similarItemCount)
+        const similarItems = sorted.slice(0, similarItemCount)
 
-      const dissimilarItems = sorted.slice(-(maxSize - similarItemCount))
+        const dissimilarItems = sorted.slice(-(maxSize - similarItemCount))
 
-      const objects = similarItems.concat(dissimilarItems).map(object => ({
-        _index: getIndex(),
-        _type: 'object',
-        _id: object.id,
-        _source: object})
-      )
+        const objects = similarItems.concat(dissimilarItems).map(object => ({
+          _index: index,
+          _type: 'object',
+          _id: object.id,
+          _source: object})
+        )
 
-      res.json({hits: {
-        total: objects.length,
-        hits: objects
-      }})
-    }))
-    .catch((error) => {
-      console.error(`[error] axios.all: ${error.message}`)
-      res.json(error.message)
+        res.json({hits: {
+          total: objects.length,
+          hits: objects
+        }})
+      }))
+      .catch((error) => {
+        console.error(`[error] axios.all: ${error.message}`)
+        res.json(error.message)
+      })
     })
 })
 
