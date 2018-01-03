@@ -8,11 +8,12 @@ const bodyParser = require('body-parser')
 const elasticsearch = require('elasticsearch')
 const express = require('express')
 const fs = require('fs')
-const htpasswdFilePath = path.resolve(__dirname, '../.htpasswd')
 const morgan = require('morgan')
 const path = require('path')
 const request = require('request')
 const s3 = new AWS.S3()
+
+const htpasswdFilePath = path.resolve(__dirname, '../.htpasswd')
 
 // using this instead of ejs to template from the express routes after we fetch object data.
 // because the webpack compiler is already using ejs.
