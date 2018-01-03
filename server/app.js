@@ -12,6 +12,7 @@ const fs = require('fs')
 const htpasswdFilePath = path.resolve(__dirname, '../.htpasswd')
 const axios = require('axios')
 const artObjectTitles = require('../src/artObjectTitles.json')
+const async = require('async')
 
 // using this instead of ejs to template from the express routes after we fetch object data.
 // because the webpack compiler is already using ejs.
@@ -109,6 +110,8 @@ AWS.config.update({
 
 const signedUrlExpireSeconds = 60 * 5
 
+let index = process.env.ELASTICSEARCH_INDEX
+
 const app = express()
 const esClient = new elasticsearch.Client({
   host: [
@@ -154,9 +157,48 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(htpasswdFilePath)) {
 // let index fall through to the wild card route
 app.use(express.static(path.resolve(__dirname, '..', 'build'), { index: false }))
 
+const getIndex = function(callback) {
+  if (index) { return callback(null, index) }
+
+  async function hasTags (client, index) {
+    return await client
+      .search({index, body: { query: { exists: { field : "tags.*.*" }  } }, size: 0 })
+      .then(result => {
+        return result.hits.total > 0
+      })
+  }
+
+  async function find (client, indices, predicate) {
+    let check = false, result = null;
+      for (let index of indices) {
+        check = await predicate(client, index)
+        if (check) {
+          result = index
+          break
+        }
+      }
+      return result
+  }
+
+  async function getFirstIndexWithTags(indices) {
+    return await find(esClient, indices.split('\n'), hasTags)
+  }
+
+  return esClient.cat
+    .indices({index: 'collection_*', s: 'creation.date:desc', h: ['i']})
+    .then(getFirstIndexWithTags)
+    .then(idx => { return callback(null, idx) })
+}
+
+app.get('/api/latestIndex', (req, res) => {
+  async.series([getIndex], function(err, results) {
+    res.json(results)
+  })
+})
+
 app.get('/api/objects/:object_id', (req, res) => {
   const options = {
-    index: process.env.ELASTICSEARCH_INDEX,
+    index: getIndex(),
     type: 'object',
     id: req.params.object_id
   }
@@ -172,7 +214,7 @@ app.get('/api/objects/:object_id', (req, res) => {
 
 app.get('/api/search', (req, res) => {
   esClient.search({
-    index: process.env.ELASTICSEARCH_INDEX,
+    index: getIndex(),
     body: req.query.body
   }, function (error, esRes) {
     if (error) {
@@ -211,7 +253,7 @@ function getRelatedObjects (objectID) {
     .query('more_like_this', {
       'like': [
         {
-          '_index': process.env.ELASTICSEARCH_INDEX,
+          '_index': getIndex(),
           '_type': 'object',
           '_id': objectID
         }
@@ -277,7 +319,7 @@ app.get('/api/related', (req, res) => {
       const dissimilarItems = sorted.slice(-(maxSize - similarItemCount))
 
       const objects = similarItems.concat(dissimilarItems).map(object => ({
-        _index: process.env.ELASTICSEARCH_INDEX,
+        _index: getIndex(),
         _type: 'object',
         _id: object.id,
         _source: object})
