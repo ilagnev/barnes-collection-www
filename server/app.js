@@ -13,12 +13,14 @@ const path = require('path')
 const request = require('request')
 const s3 = new AWS.S3()
 
+const instance = axios.create({baseURL: process.env.AXIOS_BASEURL})
+
 const htpasswdFilePath = path.resolve(__dirname, '../.htpasswd')
 
 // using this instead of ejs to template from the express routes after we fetch object data.
 // because the webpack compiler is already using ejs.
 const Handlebars = require('handlebars')
-const canonicalRoot = process.env.REACT_APP_CANONICAL_ROOT || '/'
+const canonicalRoot = process.env.AXIOS_BASEURL + process.env.REACT_APP_CANONICAL_ROOT || '/'
 
 // todo #switchImportToRequire - consolidate with constants (can't use import yet.)
 const META_TITLE = process.env.REACT_APP_META_TITLE || 'Barnes Collection Online'
@@ -111,7 +113,7 @@ AWS.config.update({
 
 const signedUrlExpireSeconds = 60 * 5
 
-let index = process.env.ELASTICSEARCH_INDEX
+let esIndex = process.env.ELASTICSEARCH_INDEX
 
 const app = express()
 const esClient = new elasticsearch.Client({
@@ -159,7 +161,7 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(htpasswdFilePath)) {
 app.use(express.static(path.resolve(__dirname, '..', 'build'), { index: false }))
 
 const getIndex = function(callback) {
-  if (esIndex) { return callback(null, esIndex) }
+  if (esIndex !== null && typeof esIndex === 'string' && esIndex.length > 0) { return callback(null, esIndex) }
 
   async function hasTags (client, index) {
     return await client
@@ -182,7 +184,8 @@ const getIndex = function(callback) {
   }
 
   async function getFirstIndexWithTags(indices) {
-    return await find(esClient, indices.split('\n'), hasTags)
+    const latest_index_with_tags = await find(esClient, indices.split('\n'), hasTags)
+    return latest_index_with_tags
   }
 
   return esClient.cat
@@ -216,7 +219,7 @@ app.get('/api/objects/:object_id', (req, res) => {
 })
 
 app.get('/api/search', (req, res) => {
-  getIndex((err, index) => {
+  async.series([getIndex], (err, index) => {
     esClient.search({
       index: index,
       body: req.query.body
@@ -239,7 +242,7 @@ function getObjectDescriptors (objectID) {
     .build()
 
   return axios
-    .get(`${canonicalRoot}/api/search`, { params: { body } })
+    .get(`${canonicalRoot}/api/search`, {params: { body }})
     .then(response => {
       const hits = response.data.hits.hits
       const hitSource = hits.length ? hits[0]._source : {}
@@ -248,6 +251,7 @@ function getObjectDescriptors (objectID) {
     })
     .catch((error) => {
       console.error(`[error] getObjectDescriptors:`, error.message)
+      console.error(error)
     })
 }
 
