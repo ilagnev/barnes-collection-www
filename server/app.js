@@ -20,7 +20,7 @@ const htpasswdFilePath = path.resolve(__dirname, '../.htpasswd')
 // using this instead of ejs to template from the express routes after we fetch object data.
 // because the webpack compiler is already using ejs.
 const Handlebars = require('handlebars')
-const canonicalRoot = process.env.AXIOS_BASEURL + process.env.REACT_APP_CANONICAL_ROOT || '/'
+const canonicalRoot = (process.env.AXIOS_BASEURL || '') + (process.env.REACT_APP_CANONICAL_ROOT || '/')
 
 // todo #switchImportToRequire - consolidate with constants (can't use import yet.)
 const META_TITLE = process.env.REACT_APP_META_TITLE || 'Barnes Collection Online'
@@ -256,7 +256,7 @@ function getObjectDescriptors (objectID) {
 }
 
 function getRelatedObjects (objectID) {
-  getIndex((err, index) => {
+  return getIndex((err, index) => {
     let body = bodybuilder()
       .filter('exists', 'imageSecret')
       .from(0).size(1000)
