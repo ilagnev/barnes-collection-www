@@ -27,7 +27,7 @@ const META_TITLE = process.env.REACT_APP_META_TITLE || 'Barnes Collection Online
 const META_PLACENAME = process.env.REACT_APP_META_PLACENAME || ''
 const META_DESCRIPTION = process.env.REACT_APP_META_DESCRIPTION || ''
 const META_IMAGE = process.env.REACT_APP_META_IMAGE || ''
-const DEFAULT_TITLE_URL = process.env.DEFAULT_TITLE_URL || 'barnes-collection-object';
+const DEFAULT_TITLE_URL = process.env.DEFAULT_TITLE_URL || 'barnes-collection-object'
 
 const clamp = (num, min, max) => Math.max(min, Math.min(max, num))
 
