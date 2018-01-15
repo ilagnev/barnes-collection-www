@@ -32,22 +32,55 @@ const clamp = (num, min, max) => Math.max(min, Math.min(max, num))
 
 const oneDay = 60 * 60 * 24
 
-const cache = (duration = oneDay) => {
-  return (req, res, next) => {
-    const key = `__cache__${req.originalUrl || req.url}`
-    const shouldCache = req.query.cache !== 'false'
-    const cachedBody = memoryCache.get(key)
-    if (shouldCache && cachedBody) {
-      return res.send(cachedBody)
-    } else {
-      res.sendResponse = res.send
-      res.send = (body) => {
-        memoryCache.put(key, body, duration * 1000)
-        res.sendResponse(body)
-      }
-      next()
+const cache = (req, res, next) => {
+  const key = `__cache__${req.originalUrl || req.url}`
+  const shouldCache = req.query.cache !== 'false'
+  const cachedBody = memoryCache.get(key)
+  console.log(`checking cache`)
+  if (shouldCache && cachedBody) {
+    console.log(`found cache for ${key}`)
+    req.headers['x-cached'] = true
+    res.send(cachedBody)
+    console.log(`sent cache for ${key}`)
+  } else {
+    res.sendResponse = res.send
+    res.send = (body) => {
+      console.log(`saving cache for ${key}`)
+      memoryCache.put(key, body, oneDay * 1000)
+      console.log(`sending response for ${key}`)
+      res.sendResponse(body)
+      console.log(`sent response for ${key}`)
     }
   }
+  next()
+}
+
+const normalizeDissimilarPercent = (req, res, next) => {
+  const divisions = 10
+  const normalizedPercent = parseInt(divisions * Math.round(parseInt(req.query.dissimilarPercent / divisions)))
+
+  if (parseInt(req.query.dissimilarPercent) !== normalizedPercent) {
+    console.log(`normalizing ${req.query.dissimilarPercent} to ${normalizedPercent}`)
+    if (req.query.dissimilarPercent) req.query.dissimilarPercent = normalizedPercent
+    if (req.originalUrl) req.originalUrl.replace(/dissimilarPercent=\d+/, `dissimilarPercent=${normalizedPercent}`)
+    if (req.url) req.url.replace(/dissimilarPercent=\d+/, `dissimilarPercent=${normalizedPercent}`)
+  }
+  next()
+}
+
+const warmCache = (req, res, next) => {
+  if (req.headers['x-cached'] || req.headers['x-warmed']) { return next() }
+  req.headers['x-warmed'] = true
+  const divisions = 10
+  const normalizedKeys = [...Array(divisions + 1).keys()].map(key => 100 * key / divisions)
+  async.each(normalizedKeys, (dissimilarPercent) => {
+    const newUrl = `${req.originalUrl || req.url}`.replace(/dissimilarPercent=\d+/, `dissimilarPercent=${dissimilarPercent}`)
+    const key = `__cache__${newUrl}`
+    if (!memoryCache.get(key)) {
+      req.headers['x-cache-key'] = key
+      getRelated(req, res)
+    }
+  })
 }
 
 // todo #switchImportToRequire - consolidate with src/objectDataUtils.js
@@ -328,7 +361,8 @@ const getDistance = (from, to) => {
   return distanceKeys.length > 0 ? distance / distanceKeys.length : Infinity
 }
 
-app.get('/api/related', cache(), (req, res) => {
+const getRelated = (req, res, next) => {
+  if (req.headers['x-cached']) { console.log(`skipping getRelated`); return next() }
   getIndex((err, index) => {
     const {objectID, dissimilarPercent} = req.query
     const similarPercent = 100 - clamp(dissimilarPercent, 0, 100)
@@ -356,17 +390,29 @@ app.get('/api/related', cache(), (req, res) => {
           _source: object})
         )
 
-        res.json({hits: {
+        const result = {hits: {
           total: objects.length,
           hits: objects
-        }})
+        }}
+
+        if (req.headers['x-cache-key']) {
+          memoryCache.put(req.headers['x-cache-key'], result)
+        } else {
+          res.json(result)
+        }
       }))
       .catch((error) => {
         console.error(`[error] axios.all: ${error.message}`)
         res.json(error.message)
       })
+
+    if (!req.headers['x-cache-key']) {
+      next()
+    }
   })
-})
+}
+
+app.get('/api/related', normalizeDissimilarPercent, cache, getRelated, warmCache)
 
 const getSignedUrl = (invno) => {
   const url = s3.getSignedUrl('getObject', {
